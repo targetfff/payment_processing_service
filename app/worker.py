@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 
 import httpx
 from faststream.exceptions import RejectMessage
+from faststream.rabbit import Channel
 
 from app.db.session import async_session_factory
 from app.messaging.broker import broker, payments_new_queue
@@ -89,7 +90,10 @@ async def handle_payment_message(message: dict) -> None:
             raise RejectMessage
 
 
-@broker.subscriber(payments_new_queue)
+@broker.subscriber(
+    payments_new_queue,
+    channel=Channel(prefetch_count=10),
+)
 async def process_payment(message: dict) -> None:
     await handle_payment_message(message)
 
