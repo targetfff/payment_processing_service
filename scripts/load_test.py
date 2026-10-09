@@ -1,11 +1,10 @@
 import asyncio
+import os
 import statistics
 import time
 import uuid
-import os
 
 import httpx
-
 
 BASE_URL = "http://localhost:8000"
 API_KEY = os.getenv("API_KEY", "change-me")
