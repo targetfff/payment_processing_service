@@ -104,7 +104,6 @@ def downgrade() -> None:
     op.drop_index("ix_outbox_aggregate_id", table_name="outbox")
     op.drop_table("outbox")
 
-    op.drop_index("ix_payments_idempotency_key", table_name="payments")
     op.drop_table("payments")
 
     bind = op.get_bind()
