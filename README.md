@@ -1,60 +1,116 @@
 # Payment Processing Service
 
-Асинхронный сервис обработки платежей на FastAPI с PostgreSQL, RabbitMQ и реализацией Transactional Outbox Pattern.
+[![CI](https://github.com/targetfff/payment_processing_service/actions/workflows/ci.yml/badge.svg)](https://github.com/targetfff/payment_processing_service/actions/workflows/ci.yml)
 
-Платёж создаётся через HTTP API со статусом `pending`, после чего событие сохраняется в Outbox в рамках той же транзакции. Outbox publisher отправляет событие в RabbitMQ, consumer эмулирует обработку платежа и отправляет результат на указанный webhook.
+Микросервис для асинхронной обработки платежей. Сервис принимает запросы на оплату, обрабатывает их через внешний шлюз (эмуляцию) и уведомляет клиента о результате через webhook.
+
+Платёж создаётся через HTTP API со статусом PENDING. В той же транзакции в PostgreSQL сохраняется Outbox-событие. При создании платежа публикуется событие в очередь payments.new. Consumer эмулирует обработку платежа, обновляет его статус и отправляет результат на указанный webhook.
 
 ## Стек
 
-- Python
+- Python 3.13
 - FastAPI
 - Pydantic v2
 - SQLAlchemy 2.0 Async
-- PostgreSQL
+- asyncpg
+- PostgreSQL 17
 - RabbitMQ
 - FastStream
 - Alembic
+- httpx
+- pytest / pytest-asyncio / respx
+- Ruff
 - Docker / Docker Compose
+- GitHub Actions
 
-## Схема работы
+## Возможности
+
+- создание платежей через REST API;
+- получение информации о платеже;
+- защита payment endpoints через `X-API-Key`;
+- идемпотентное создание платежей через `Idempotency-Key`;
+- Transactional Outbox для надёжной публикации событий;
+- асинхронная обработка платежей через RabbitMQ;
+- эмуляция обработки в течение 2–5 секунд;
+- 90% вероятность SUCCEEDED, 10% — FAILED;
+- отправка результата на webhook;
+- 3 попытки доставки webhook с экспоненциальной задержкой;
+- Dead Letter Queue для окончательно не доставленных сообщений;
+- защита от повторной обработки уже доставленного сообщения;
+- Alembic-миграции;
+- Docker Compose;
+- unit-тесты, Ruff и GitHub Actions CI.
+
+## Можно добавить в production
+
+- вынести сервис публикации Outbox-событий в отдельный worker/process;
+- использовать atomic claim / lease-механизм для обработки Outbox-событий без долгих транзакций;
+- добавить состояние `processing` или техническое поле `locked_until` для безопасной параллельной обработки несколькими consumer'ами;
+- включить Publisher Confirms и устанавливать published_at только после подтверждения RabbitMQ, чтобы снизить риск потери события между публикацией и фиксацией его состояния в Outbox.- добавить `event_id` и Inbox Pattern для более строгой идемпотентности consumer;
+- создать отдельные RabbitMQ exchange и dead-letter exchange вместо использования default exchange;
+- добавить метрики и мониторинг через Prometheus / Grafana;
+- добавить структурированные логи и event ID для трассировки платежа через весь пайплайн;
+- добавить эндпоинты /health;
+- использовать отдельную тестовую PostgreSQL/RabbitMQ инфраструктуру для integration и end-to-end тестов в CI.
+
+## Архитектура
 
 ```text
-POST /api/v1/payments
-        |
-        v
+Client
+  |
+  | POST /api/v1/payments
+  v
+FastAPI
+  |
+  | one DB transaction
+  v
 PostgreSQL
-Payment + Outbox
-одна транзакция
-        |
-        v
+  +----------------------+
+  | Payment              |
+  | Outbox event         |
+  +----------------------+
+          |
+          | unpublished events
+          v
 Outbox Publisher
-        |
-        v
-RabbitMQ
-payments.new
-        |
-        v
+          |
+          v
+RabbitMQ: payments.new
+          |
+          v
 Consumer
-        |
-        +--> обработка 2–5 секунд
-        |
-        +--> succeeded (90%)
-        |    failed    (10%)
-        |
-        v
+  |
+  +--> processing 2–5 sec
+  |
+  +--> succeeded (90%)
+  |    failed    (10%)
+  |
+  v
 PostgreSQL
-        |
-        v
+  |
+  v
 Webhook
-```
 
-При ошибке отправки webhook выполняется до трёх попыток с экспоненциальной задержкой. Если webhook не удалось доставить, сообщение отправляется в `payments.dlq`.
+Webhook delivery failure
+  |
+  +--> retry after 1 sec
+  +--> retry after 2 sec
+  +--> final failure
+          |
+          v
+RabbitMQ: payments.dlq
+```
 
 ## Запуск
 
-### 1. Создать `.env`
+### 1. Клонировать репозиторий
 
-Скопировать файл `.env.example`:
+```bash
+git clone https://github.com/targetfff/payment_processing_service.git
+cd payment_processing_service
+```
+
+### 2. Создать `.env`
 
 Linux / macOS / Git Bash:
 
@@ -68,7 +124,7 @@ PowerShell:
 Copy-Item .env.example .env
 ```
 
-Значения по умолчанию:
+Пример .env:
 
 ```env
 API_KEY=change-me
@@ -85,15 +141,13 @@ RABBITMQ_HOST=rabbitmq
 RABBITMQ_PORT=5672
 ```
 
-При необходимости значения можно изменить перед запуском.
-
-### 2. Запустить PostgreSQL и RabbitMQ
+### 3. Запустить PostgreSQL и RabbitMQ
 
 ```bash
 docker compose up -d postgres rabbitmq
 ```
 
-Проверить состояние контейнеров:
+Проверить состояние:
 
 ```bash
 docker compose ps
@@ -101,19 +155,19 @@ docker compose ps
 
 PostgreSQL и RabbitMQ должны перейти в состояние `healthy`.
 
-### 3. Собрать приложение
+### 4. Собрать Docker-образы
 
 ```bash
 docker compose build
 ```
 
-### 4. Применить миграции
+### 5. Применить миграции
 
 ```bash
 docker compose run --rm api alembic upgrade head
 ```
 
-### 5. Запустить API и consumer
+### 6. Запустить API и consumer
 
 ```bash
 docker compose up -d api consumer
@@ -125,10 +179,10 @@ docker compose up -d api consumer
 docker compose ps
 ```
 
-После запуска:
+После запуска доступны:
 
 - API: http://localhost:8000
-- Swagger: http://localhost:8000/docs
+- Swagger UI: http://localhost:8000/docs
 - RabbitMQ Management UI: http://localhost:15672
 
 Данные RabbitMQ по умолчанию:
@@ -140,7 +194,7 @@ password: guest
 
 ## API
 
-Все API endpoints требуют заголовок:
+Все payment endpoints требуют заголовок:
 
 ```text
 X-API-Key: change-me
@@ -154,13 +208,13 @@ X-API-Key: change-me
 POST /api/v1/payments
 ```
 
-Также требуется уникальный заголовок:
+Обязательный заголовок:
 
 ```text
 Idempotency-Key
 ```
 
-Пример:
+Пример запроса (можно через Swagger):
 
 ```bash
 curl -X POST "http://localhost:8000/api/v1/payments" \
@@ -174,7 +228,7 @@ curl -X POST "http://localhost:8000/api/v1/payments" \
     "metadata": {
       "order_id": "1001"
     },
-    "webhook_url": "https://webhook.site/YOUR-UUID"
+    "webhook_url": "https://webhook.site/UUID"
   }'
 ```
 
@@ -194,15 +248,9 @@ HTTP status:
 202 Accepted
 ```
 
-Повторный запрос с тем же `Idempotency-Key` не создаёт новый платёж и возвращает уже существующий.
+Повторный запрос с тем же `Idempotency-Key` возвращает уже существующий платёж и не создаёт новый `Payment` или Outbox-событие.
 
-Поддерживаемые валюты:
-
-```text
-RUB
-USD
-EUR
-```
+Поддерживаемые валюты: RUB, USD, EUR
 
 ### Получение платежа
 
@@ -217,7 +265,7 @@ curl "http://localhost:8000/api/v1/payments/15c00783-30bb-4291-a177-da551c3230da
   -H "X-API-Key: change-me"
 ```
 
-Сразу после создания платёж обычно имеет статус:
+Пример ответа:
 
 ```json
 {
@@ -228,33 +276,63 @@ curl "http://localhost:8000/api/v1/payments/15c00783-30bb-4291-a177-da551c3230da
   "metadata": {
     "order_id": "1001"
   },
-  "status": "pending",
+  "status": "succeeded",
   "idempotency_key": "order-1001",
-  "webhook_url": "https://webhook.site/YOUR-UUID",
+  "webhook_url": "https://webhook.site/UUID",
   "created_at": "2026-10-09T05:30:00.000000Z",
-  "processed_at": null
+  "processed_at": "2026-10-09T05:30:04.123456Z"
 }
 ```
 
-Через 2–5 секунд consumer завершит обработку, после чего статус станет:
+Возможные статусы:
 
 ```text
+pending
 succeeded
-```
-
-или:
-
-```text
 failed
 ```
 
-Вероятность успешной обработки — 90%, ошибки — 10%.
+## Idempotency
+
+`Idempotency-Key` хранится в таблице `payments` с уникальным ограничением.
+
+Обычный повторный запрос возвращает уже созданный платёж. Для конкурентных запросов используется дополнительная обработка `IntegrityError`, поэтому два одновременных запроса с одинаковым ключом не создают два платежа.
+
+## Outbox  паттерн
+
+`Payment` и соответствующее Outbox-событие создаются в одной транзакции PostgreSQL
+
+Фоновый отправитель событий из выбирает неопубликованные события:
+
+```text
+published_at IS NULL
+```
+
+Для конкурентного чтения используется:
+
+```text
+FOR UPDATE SKIP LOCKED
+```
+
+После успешной публикации события в `payments.new` поле `published_at` заполняется.
+
+Доставка имеет семантику **at-least-once**, поэтому consumer рассчитан на возможные повторные сообщения.
+
+## Обработка платежа
+
+Consumer получает `payment_id` из `payments.new`, загружает конкретный платёж из PostgreSQL и:
+
+1. ждёт случайное время от 2 до 5 секунд;
+2. устанавливает `succeeded` с вероятностью 90% или `failed` с вероятностью 10%;
+3. заполняет `processed_at`;
+4. сохраняет результат;
+5. отправляет webhook.
 
 ## Webhook
 
-После обработки платежа consumer отправляет `POST` на переданный при создании `webhook_url`.
+После обработки consumer отправляет `POST` на `webhook_url`.
 
-Пример payload:
+Payload:
 
 ```json
 {
@@ -264,52 +342,25 @@ failed
 }
 ```
 
-При ошибке доставки выполняется три попытки:
+При ошибке доставки выполняется максимум 3 попытки:
 
 ```text
 attempt 1
    |
-   +-- ошибка --> ожидание 1 сек.
+   +-- error --> wait 1 sec
 
 attempt 2
    |
-   +-- ошибка --> ожидание 2 сек.
+   +-- error --> wait 2 sec
 
 attempt 3
    |
-   +-- ошибка --> payments.dlq
+   +-- error --> reject message --> payments.dlq
 ```
 
-После успешной доставки время сохраняется в `webhook_sent_at`, что позволяет consumer не отправлять webhook повторно при повторной доставке уже обработанного сообщения.
+После успешной доставки заполняется `webhook_sent_at`.
 
-## Transactional Outbox
-
-Создание `Payment` и соответствующего события `Outbox` выполняется в одной транзакции PostgreSQL:
-
-```text
-BEGIN
-
-INSERT payment
-INSERT outbox event
-
-COMMIT
-```
-
-Это исключает ситуацию, когда платёж сохранён в БД, но событие для RabbitMQ потеряно из-за сбоя между двумя независимыми операциями.
-
-Outbox publisher периодически выбирает только неопубликованные события:
-
-```text
-published_at IS NULL
-```
-
-После успешной публикации в `payments.new` поле `published_at` заполняется.
-
-Для конкурентного чтения используется:
-
-```text
-FOR UPDATE SKIP LOCKED
-```
+Если RabbitMQ повторно доставит уже обработанное сообщение и `webhook_sent_at` заполнен, consumer пропустит повторную отправку webhook.
 
 ## RabbitMQ
 
@@ -320,17 +371,79 @@ payments.new
 payments.dlq
 ```
 
-`payments.new` содержит события новых платежей.
-
-Если обработка сообщения окончательно завершается ошибкой после трёх попыток доставки webhook, сообщение отклоняется consumer и попадает в `payments.dlq`.
-
-Состояние очередей можно посмотреть через RabbitMQ Management UI:
+`payments.new` настроена с Dead Letter параметрами:
 
 ```text
-http://localhost:15672
+x-dead-letter-exchange: ""
+x-dead-letter-routing-key: payments.dlq
 ```
 
-## Просмотр логов
+При окончательной ошибке webhook consumer отклоняет сообщение, после чего RabbitMQ переносит его в `payments.dlq`.
+
+Состояние очередей доступно через http://localhost:15672
+
+
+## Тесты
+
+Тесты покрывают ключевую логику приложения:
+
+- API-контракт и авторизацию;
+- `Payment + Outbox`;
+- идемпотентность;
+- конкурентный конфликт `Idempotency-Key`;
+- webhook success / retry / final failure;
+- consumer success / failure;
+- дублирование сообщений;
+- missing payment;
+- `RejectMessage` при окончательной ошибке webhook;
+- Outbox publisher success / failure / empty queue.
+
+Запуск:
+
+```bash
+docker compose run --rm api python -m pytest -v
+```
+
+## Ruff
+
+Проверка кода:
+
+```bash
+docker compose run --rm api ruff check .
+```
+
+Форматирование:
+
+```bash
+docker compose run --rm api ruff format .
+```
+
+## CI
+
+GitHub Actions запускается на каждый `push` и `pull_request`.
+
+Workflow выполняет:
+
+```text
+Python 3.13
+   |
+   v
+Install dependencies
+   |
+   v
+Ruff
+   |
+   v
+pytest
+```
+
+Workflow:
+
+```text
+.github/workflows/ci.yml
+```
+
+## Логи
 
 Все сервисы:
 
@@ -338,13 +451,13 @@ http://localhost:15672
 docker compose logs -f
 ```
 
-Только API:
+API:
 
 ```bash
 docker compose logs -f api
 ```
 
-Только consumer:
+Consumer:
 
 ```bash
 docker compose logs -f consumer
@@ -352,17 +465,19 @@ docker compose logs -f consumer
 
 ## Остановка
 
+Остановить сервисы:
+
 ```bash
 docker compose down
 ```
 
-Остановка с удалением данных PostgreSQL:
+Остановить сервисы и удалить данные PostgreSQL:
 
 ```bash
 docker compose down -v
 ```
 
-После удаления volume перед следующим использованием необходимо снова применить миграции:
+После удаления volume миграции необходимо применить повторно:
 
 ```bash
 docker compose up -d postgres rabbitmq
