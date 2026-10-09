@@ -3,15 +3,12 @@ import logging
 
 import httpx
 
-
 logger = logging.getLogger(__name__)
 
 
 async def send_payment_webhook(
-        webhook_url: str,
-        payment_id: str,
-        status: str,
-        processed_at: str) -> None:
+    webhook_url: str, payment_id: str, status: str, processed_at: str
+) -> None:
     payload = {
         "payment_id": payment_id,
         "status": status,

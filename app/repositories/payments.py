@@ -14,9 +14,7 @@ class PaymentRepository:
         self,
         payment_id: uuid.UUID,
     ) -> Payment | None:
-        result = await self.session.execute(
-            select(Payment).where(Payment.id == payment_id)
-        )
+        result = await self.session.execute(select(Payment).where(Payment.id == payment_id))
         return result.scalar_one_or_none()
 
     async def get_by_idempotency_key(
@@ -24,8 +22,6 @@ class PaymentRepository:
         idempotency_key: str,
     ) -> Payment | None:
         result = await self.session.execute(
-            select(Payment).where(
-                Payment.idempotency_key == idempotency_key
-            )
+            select(Payment).where(Payment.idempotency_key == idempotency_key)
         )
         return result.scalar_one_or_none()

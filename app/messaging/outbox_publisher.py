@@ -12,5 +12,8 @@ async def publish_outbox_events() -> None:
             events = await repository.get_unpublished()
 
             for event in events:
-                await broker.publish(event.payload, queue=payments_new_queue,)
+                await broker.publish(
+                    event.payload,
+                    queue=payments_new_queue,
+                )
                 event.published_at = datetime.now(timezone.utc)

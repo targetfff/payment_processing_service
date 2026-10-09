@@ -13,13 +13,11 @@ from app.models.payment import PaymentStatus
 from app.repositories.payments import PaymentRepository
 from app.services.webhooks import send_payment_webhook
 
-
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-@broker.subscriber(payments_new_queue)
-async def process_payment(message: dict) -> None:
+async def handle_payment_message(message: dict) -> None:
     payment_id = uuid.UUID(message["payment_id"])
 
     async with async_session_factory() as session:
@@ -63,8 +61,8 @@ async def process_payment(message: dict) -> None:
             )
         if payment.webhook_sent_at is not None:
             logger.info(
-            "Payment %s webhook already delivered, skipping duplicate message",
-            payment_id,
+                "Payment %s webhook already delivered, skipping duplicate message",
+                payment_id,
             )
             return
         try:
@@ -89,6 +87,12 @@ async def process_payment(message: dict) -> None:
             )
 
             raise RejectMessage
+
+
+@broker.subscriber(payments_new_queue)
+async def process_payment(message: dict) -> None:
+    await handle_payment_message(message)
+
 
 async def main() -> None:
     await broker.start()

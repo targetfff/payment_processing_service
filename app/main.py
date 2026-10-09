@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI
@@ -7,9 +8,8 @@ from app.api.router import api_router
 from app.messaging.broker import broker, payments_dlq_queue, payments_new_queue
 from app.messaging.outbox_publisher import publish_outbox_events
 
-import logging
-
 logger = logging.getLogger(__name__)
+
 
 async def outbox_loop() -> None:
     while True:

@@ -19,9 +19,7 @@ class PaymentService:
         data: PaymentCreate,
         idempotency_key: str,
     ) -> Payment:
-        existing = await self.repository.get_by_idempotency_key(
-            idempotency_key
-        )
+        existing = await self.repository.get_by_idempotency_key(idempotency_key)
         if existing is not None:
             return existing
 
@@ -53,9 +51,7 @@ class PaymentService:
         except IntegrityError:
             await self.session.rollback()
 
-            existing = await self.repository.get_by_idempotency_key(
-                idempotency_key
-            )
+            existing = await self.repository.get_by_idempotency_key(idempotency_key)
             if existing is not None:
                 return existing
 

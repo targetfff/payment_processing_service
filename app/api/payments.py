@@ -12,7 +12,6 @@ from app.schemas.payment import (
 )
 from app.services.payments import PaymentService
 
-
 router = APIRouter(
     prefix="/api/v1/payments",
     tags=["payments"],
