@@ -8,6 +8,20 @@ jobs:
   checks:
     runs-on: ubuntu-latest
 
+    env:
+      API_KEY: test-api-key
+
+      POSTGRES_DB: payments
+      POSTGRES_USER: payments
+      POSTGRES_PASSWORD: payments
+      POSTGRES_HOST: localhost
+      POSTGRES_PORT: 5432
+
+      RABBITMQ_USER: guest
+      RABBITMQ_PASSWORD: guest
+      RABBITMQ_HOST: localhost
+      RABBITMQ_PORT: 5672
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
